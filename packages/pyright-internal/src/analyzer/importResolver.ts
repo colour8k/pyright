@@ -15,9 +15,9 @@ import { ConfigOptions, ExecutionEnvironment, matchFileSpecs } from '../common/c
 import { Host } from '../common/host';
 import { stubsSuffix } from '../common/pathConsts';
 import { stripFileExtension } from '../common/pathUtils';
-import { PythonVersion, versionFromString } from '../common/pythonVersion';
+import { PythonVersion, pythonVersion3_0 } from '../common/pythonVersion';
+import { ServiceKeys } from '../common/serviceKeys';
 import { ServiceProvider } from '../common/serviceProvider';
-import { ServiceKeys } from '../common/serviceProviderExtensions';
 import * as StringUtils from '../common/stringUtils';
 import { equateStringsCaseInsensitive } from '../common/stringUtils';
 import { Uri } from '../common/uri/uri';
@@ -26,7 +26,7 @@ import { isIdentifierChar, isIdentifierStartChar } from '../parser/characters';
 import { ImplicitImport, ImportResult, ImportType } from './importResult';
 import { getDirectoryLeadingDotsPointsTo } from './importStatementUtils';
 import { ImportPath, ParentDirectoryCache } from './parentDirectoryCache';
-import { PyTypedInfo, getPyTypedInfo } from './pyTypedUtils';
+import { PyTypedInfo, getPyTypedInfoForPyTypedFile } from './pyTypedUtils';
 import * as PythonPathUtils from './pythonPathUtils';
 import * as SymbolNameUtils from './symbolNameUtils';
 import { isDunderName } from './symbolNameUtils';
@@ -471,7 +471,7 @@ export class ImportResolver {
         this._cachedTypeshedStdLibModuleVersionInfo.forEach((versionInfo, moduleName) => {
             let shouldExcludeModule = false;
 
-            if (versionInfo.max !== undefined && pythonVersion > versionInfo.max) {
+            if (versionInfo.max !== undefined && pythonVersion.isGreaterThan(versionInfo.max)) {
                 shouldExcludeModule = true;
             }
 
@@ -2062,11 +2062,11 @@ export class ImportResolver {
             const versionInfo = this._cachedTypeshedStdLibModuleVersionInfo.get(namePartsToConsider.join('.'));
 
             if (versionInfo) {
-                if (pythonVersion < versionInfo.min) {
+                if (pythonVersion.isLessThan(versionInfo.min)) {
                     return false;
                 }
 
-                if (versionInfo.max !== undefined && pythonVersion > versionInfo.max) {
+                if (versionInfo.max !== undefined && pythonVersion.isGreaterThan(versionInfo.max)) {
                     return false;
                 }
 
@@ -2137,14 +2137,14 @@ export class ImportResolver {
                             // If the version ends in "+", strip it off.
                             minVersionString = minVersionString.substr(0, minVersionString.length - 1);
                         }
-                        let minVersion = versionFromString(minVersionString);
+                        let minVersion = PythonVersion.fromString(minVersionString);
                         if (!minVersion) {
-                            minVersion = PythonVersion.V3_0;
+                            minVersion = pythonVersion3_0;
                         }
 
                         let maxVersion: PythonVersion | undefined;
                         if (versionSplit.length > 1) {
-                            maxVersion = versionFromString(versionSplit[1].trim());
+                            maxVersion = PythonVersion.fromString(versionSplit[1].trim());
                         }
 
                         // A semicolon can be followed by a semicolon-delimited list of other
@@ -2232,27 +2232,26 @@ export class ImportResolver {
     }
 
     private _getTypeshedRoot(customTypeshedPath: Uri | undefined, importFailureInfo: string[]) {
-        if (this._cachedTypeshedRoot !== undefined) {
-            return this._cachedTypeshedRoot;
-        }
+        if (this._cachedTypeshedRoot === undefined) {
+            let typeshedPath = undefined;
 
-        let typeshedPath = undefined;
-
-        // Did the user specify a typeshed path? If not, we'll look in the
-        // python search paths, then in the typeshed-fallback directory.
-        if (customTypeshedPath) {
-            if (this.dirExistsCached(customTypeshedPath)) {
-                typeshedPath = customTypeshedPath;
+            // Did the user specify a typeshed path? If not, we'll look in the
+            // python search paths, then in the typeshed-fallback directory.
+            if (customTypeshedPath) {
+                if (this.dirExistsCached(customTypeshedPath)) {
+                    typeshedPath = customTypeshedPath;
+                }
             }
+
+            // If typeshed directory wasn't found in other locations, use the fallback.
+            if (!typeshedPath) {
+                typeshedPath = PythonPathUtils.getTypeShedFallbackPath(this.fileSystem) ?? Uri.empty();
+            }
+
+            this._cachedTypeshedRoot = typeshedPath;
         }
 
-        // If typeshed directory wasn't found in other locations, use the fallback.
-        if (!typeshedPath) {
-            typeshedPath = PythonPathUtils.getTypeShedFallbackPath(this.fileSystem) ?? Uri.empty();
-        }
-
-        this._cachedTypeshedRoot = typeshedPath;
-        return typeshedPath;
+        return this._cachedTypeshedRoot.isEmpty() ? undefined : this._cachedTypeshedRoot;
     }
 
     private _getTypeshedSubdirectory(
@@ -2272,8 +2271,11 @@ export class ImportResolver {
         }
 
         let typeshedPath = this._getTypeshedRoot(customTypeshedPath, importFailureInfo);
-        typeshedPath = PythonPathUtils.getTypeshedSubdirectory(typeshedPath, isStdLib);
+        if (typeshedPath === undefined) {
+            return undefined;
+        }
 
+        typeshedPath = PythonPathUtils.getTypeshedSubdirectory(typeshedPath, isStdLib);
         if (!this.dirExistsCached(typeshedPath)) {
             return undefined;
         }
@@ -2706,7 +2708,8 @@ export class ImportResolver {
         if (!this.fileExistsCached(filePath.pytypedUri)) {
             return undefined;
         }
-        return getPyTypedInfo(this.fileSystem, filePath);
+
+        return getPyTypedInfoForPyTypedFile(this.fileSystem, filePath.pytypedUri);
     }
 
     private _resolveNativeModuleStub(

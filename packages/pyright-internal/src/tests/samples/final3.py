@@ -52,6 +52,11 @@ class Foo:
     _member7: Final = 6
     __member8: Final = 6
 
+    member9: Final = 2
+
+    # This should generate an error.
+    member9 = 3
+
     def __init__(self, a: bool):
         # This should generate an error because a Final
         # member outside of a stub file or a class body
@@ -191,3 +196,17 @@ def func3(x: type[T]) -> T:
 
 # This should generate two errors because Final isn't compatible with type.
 func3(Final[int])
+
+
+foo5: Final = lambda: None
+
+
+# This should generate an error because foo5 is declared as Final.
+def foo5() -> None:
+    pass
+
+
+# This should generate an error because ClassVar is Final.
+from typing import ClassVar
+
+ClassVar: Final = 3

@@ -201,13 +201,13 @@
       "$id": "#/properties/reportInvalidTypeForm",
       "$ref": "#/definitions/diagnostic",
       "title": "Controls reporting of type expressions that use an invalid form",
-      "default": "warning"
+      "default": "error"
     },
     "reportMissingTypeStubs": {
       "$id": "#/properties/reportMissingTypeStubs",
       "$ref": "#/definitions/diagnostic",
       "title": "Controls reporting of imports that cannot be resolved to type stub files",
-      "default": "warning"
+      "default": "none"
     },
     "reportImportCycles": {
       "$id": "#/properties/reportImportCycles",
@@ -573,6 +573,12 @@
       "$id": "#/properties/reportUnboundVariable",
       "$ref": "#/definitions/diagnostic",
       "title": "Controls reporting of attempts to use an unbound variable",
+      "default": "error"
+    },
+    "reportUnhashable": {
+      "$id": "#/properties/reportUnhashable",
+      "$ref": "#/definitions/diagnostic",
+      "title": "Controls reporting of unhashable object in container that requires hashability",
       "default": "error"
     },
     "reportUndefinedVariable": {

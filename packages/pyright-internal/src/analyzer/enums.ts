@@ -19,10 +19,10 @@ import {
     isNodeContainedWithin,
 } from './parseTreeUtils';
 import { Symbol, SymbolFlags } from './symbol';
-import { isSingleDunderName } from './symbolNameUtils';
+import { isPrivateName, isSingleDunderName } from './symbolNameUtils';
 import { FunctionArgument, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
 import { enumerateLiteralsForType } from './typeGuards';
-import { MemberAccessFlags, computeMroLinearization, lookUpClassMember } from './typeUtils';
+import { MemberAccessFlags, computeMroLinearization, lookUpClassMember, makeInferenceContext } from './typeUtils';
 import {
     AnyType,
     ClassType,
@@ -57,7 +57,7 @@ export function isEnumClassWithMembers(evaluator: TypeEvaluator, classType: Clas
     // Determine whether the enum class defines a member.
     let definesValue = false;
 
-    classType.details.fields.forEach((symbol) => {
+    ClassType.getSymbolTable(classType).forEach((symbol) => {
         const symbolType = evaluator.getEffectiveTypeOfSymbol(symbol);
         if (isClassInstance(symbolType) && ClassType.isSameGenericClass(symbolType, classType)) {
             definesValue = true;
@@ -105,7 +105,7 @@ export function createEnumType(
     classType.details.baseClasses.push(enumClass);
     computeMroLinearization(classType);
 
-    const classFields = classType.details.fields;
+    const classFields = ClassType.getSymbolTable(classType);
     classFields.set(
         '__class__',
         Symbol.createWithType(SymbolFlags.ClassMember | SymbolFlags.IgnoredForProtocolMatch, classType)
@@ -362,7 +362,12 @@ export function transformTypeForPossibleEnumClass(
     }
 
     // The spec excludes descriptors.
-    if (isClassInstance(valueType) && valueType.details.fields.get('__get__')) {
+    if (isClassInstance(valueType) && ClassType.getSymbolTable(valueType).get('__get__')) {
+        return undefined;
+    }
+
+    // The spec excludes private (mangled) names.
+    if (isPrivateName(nameNode.value)) {
         return undefined;
     }
 
@@ -373,15 +378,28 @@ export function transformTypeForPossibleEnumClass(
     }
 
     if (!assignedType && statementNode.nodeType === ParseNodeType.Assignment) {
-        assignedType = evaluator.getTypeOfExpression(statementNode.rightExpression).type;
+        assignedType = evaluator.getTypeOfExpression(
+            statementNode.rightExpression,
+            /* flags */ undefined,
+            makeInferenceContext(declaredType)
+        ).type;
     }
 
     // Handle the Python 3.11 "enum.member()" and "enum.nonmember()" features.
     if (assignedType && isClassInstance(assignedType) && ClassType.isBuiltIn(assignedType)) {
         if (assignedType.details.fullName === 'enum.nonmember') {
-            return assignedType.typeArguments && assignedType.typeArguments.length > 0
-                ? assignedType.typeArguments[0]
-                : UnknownType.create();
+            const nonMemberType =
+                assignedType.typeArguments && assignedType.typeArguments.length > 0
+                    ? assignedType.typeArguments[0]
+                    : UnknownType.create();
+
+            // If the type of the nonmember is declared and the assigned value has
+            // a compatible type, use the declared type.
+            if (declaredType && evaluator.assignType(declaredType, nonMemberType)) {
+                return declaredType;
+            }
+
+            return nonMemberType;
         }
 
         if (assignedType.details.fullName === 'enum.member') {
@@ -587,6 +605,7 @@ export function getEnumAutoValueType(evaluator: TypeEvaluator, node: ExpressionN
             // returning an "Any" type in the typeshed stubs.
             if (
                 memberInfo &&
+                !memberInfo.typeErrors &&
                 isFunction(memberInfo.type) &&
                 memberInfo.classType &&
                 isClass(memberInfo.classType) &&
